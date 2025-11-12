@@ -42,7 +42,8 @@ def process_texts(input_file, output_file, content_type="学校介绍", callback
             # 确保response是字符串类型
             if not isinstance(response, str):
                 response = ""
-            result = check_single_text(response)
+            # result = check_single_text(response)  # 如果需要学校名
+            result = response  # 如果不需要学校名
             if result == "重写文案":
                 if callback:
                     callback("rewrite", index, "")

@@ -10,12 +10,24 @@ import requests
 from docx import Document
 from docx.shared import Inches, Cm, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+import markdown
+from tkhtmlview import HTMLText
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from 主干.生成文案 import process_texts
 from 支线.教育.json转word import json_to_word
+
+# 导入文案爬取功能
+NOTE_CRAWLING_AVAILABLE = False
+XiaohongshuCrawler = None
+
+try:
+    from 支线.教育.文案爬取 import XiaohongshuCrawler
+    NOTE_CRAWLING_AVAILABLE = True
+except ImportError:
+    print("文案爬取功能不可用，请检查依赖")
 
 # 导入图片爬取功能
 IMAGE_CRAWLING_AVAILABLE = False
@@ -65,6 +77,10 @@ class XiaohongshuApp:
         # 创建标签页
         tab_control = ttk.Notebook(self.root)
         
+        # 文案爬取标签页
+        self.note_crawling_tab = ttk.Frame(tab_control)
+        tab_control.add(self.note_crawling_tab, text="文案爬取")
+        
         # 文案生成标签页
         self.text_generation_tab = ttk.Frame(tab_control)
         tab_control.add(self.text_generation_tab, text="文案生成")
@@ -79,6 +95,9 @@ class XiaohongshuApp:
         
         tab_control.pack(expand=1, fill="both")
         
+        # 文案爬取标签页内容
+        self.create_note_crawling_tab()
+        
         # 文案生成标签页内容
         self.create_text_generation_tab()
         
@@ -88,23 +107,122 @@ class XiaohongshuApp:
         # 使用说明标签页内容
         self.create_instructions_tab()
         
+    def create_note_crawling_tab(self):
+        # 爬取模式选择
+        mode_frame = ttk.LabelFrame(self.note_crawling_tab, text="爬取模式")
+        mode_frame.grid(row=0, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
+        
+        self.crawl_mode = tk.StringVar(value="keyword")
+        ttk.Radiobutton(mode_frame, text="关键词搜索", variable=self.crawl_mode, value="keyword", command=self.toggle_crawl_mode).grid(row=0, column=0, padx=5, pady=5)
+        ttk.Radiobutton(mode_frame, text="用户主页", variable=self.crawl_mode, value="user", command=self.toggle_crawl_mode).grid(row=0, column=1, padx=5, pady=5)
+        
+        # 文件选择
+        file_frame = ttk.LabelFrame(self.note_crawling_tab, text="文件选择")
+        file_frame.grid(row=1, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
+        
+        # 输出目录选择
+        ttk.Label(file_frame, text="*", foreground="red").grid(row=0, column=0, padx=(5,0), pady=5, sticky="w")
+        ttk.Label(file_frame, text="输出目录:").grid(row=0, column=0, padx=(20,0), pady=5, sticky="w")
+        self.output_dir_entry = ttk.Entry(file_frame, width=50)
+        self.output_dir_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        ttk.Button(file_frame, text="浏览", command=self.browse_output_dir).grid(row=0, column=2, padx=5, pady=5)
+        
+        # 输出文件名
+        ttk.Label(file_frame, text="输出文件名:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.output_filename_entry = ttk.Entry(file_frame, width=50)
+        self.output_filename_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        ttk.Label(file_frame, text=".json").grid(row=1, column=2, padx=5, pady=5, sticky="w")
+        
+        file_frame.columnconfigure(1, weight=1)
+        
+        # 笔记搜索参数
+        search_frame = ttk.LabelFrame(self.note_crawling_tab, text="笔记搜索")
+        search_frame.grid(row=2, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
+        
+        # 关键词搜索参数
+        self.keyword_frame = ttk.Frame(search_frame)
+        self.keyword_frame.pack(fill="x", padx=5, pady=1)
+        
+        ttk.Label(self.keyword_frame, text="搜索关键词/用户个人主页:").grid(row=0, column=0, sticky="w", pady=5)
+        self.keyword_entry = ttk.Entry(self.keyword_frame, width=50)
+        self.keyword_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        self.keyword_frame.columnconfigure(1, weight=1)
+        
+        # 用户主页参数
+        self.user_frame = ttk.Frame(search_frame)
+        self.user_frame.pack(fill="x", padx=5, pady=1)
+        self.user_frame.pack_forget()  # 默认隐藏
+        
+        ttk.Label(self.user_frame, text="搜索关键词/用户个人主页:").grid(row=0, column=0, sticky="w", pady=5)
+        self.user_url_entry = ttk.Entry(self.user_frame, width=50)
+        self.user_url_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        self.user_frame.columnconfigure(1, weight=1)
+        
+        # 最大笔记数
+        max_notes_frame = ttk.Frame(search_frame)
+        max_notes_frame.pack(fill="x", padx=5, pady=1)
+        
+        ttk.Label(max_notes_frame, text="最大笔记数:").grid(row=0, column=0, sticky="w", pady=5)
+        self.max_notes_entry = ttk.Entry(max_notes_frame, width=50)
+        self.max_notes_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.max_notes_entry.insert(0, "0")  # 0表示不限制
+        ttk.Label(max_notes_frame, text="(0表示不限制)").grid(row=0, column=2, sticky="w", padx=5)
+        
+        max_notes_frame.columnconfigure(1, weight=1)
+        
+        # 控制按钮
+        control_frame = ttk.Frame(self.note_crawling_tab)
+        control_frame.grid(row=3, column=0, columnspan=3, padx=10, pady=10, sticky="ew")
+        
+        self.crawl_button = ttk.Button(control_frame, text="开始爬取", command=self.toggle_note_crawling)
+        self.crawl_button.pack(side=tk.LEFT, padx=5)
+        
+        # 进度条
+        self.crawl_progress = ttk.Progressbar(control_frame, mode='indeterminate')
+        self.crawl_progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # 日志显示
+        log_frame = ttk.LabelFrame(self.note_crawling_tab, text="爬取日志")
+        log_frame.grid(row=4, column=0, columnspan=3, padx=10, pady=5, sticky="nsew")
+        
+        self.crawl_log_text = scrolledtext.ScrolledText(log_frame, height=15)
+        self.crawl_log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        self.note_crawling_tab.columnconfigure(0, weight=1)
+        self.note_crawling_tab.rowconfigure(4, weight=1)
+        
+    def toggle_crawl_mode(self):
+        """切换爬取模式时显示/隐藏相应输入框"""
+        if self.crawl_mode.get() == "keyword":
+            self.keyword_frame.pack(fill="x", padx=5, pady=5)
+            self.user_frame.pack_forget()
+        else:
+            self.user_frame.pack(fill="x", padx=5, pady=5)
+            self.keyword_frame.pack_forget()
+        
     def create_instructions_tab(self):
         # 创建文本框显示使用说明
         instructions_frame = ttk.Frame(self.instructions_tab)
         instructions_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # 创建滚动文本框
-        text_widget = scrolledtext.ScrolledText(instructions_frame, wrap=tk.WORD, padx=10, pady=10)
-        text_widget.pack(fill=tk.BOTH, expand=True)
+        # 创建滚动文本框用于显示HTML内容
+        html_text_widget = HTMLText(instructions_frame, html="<p>加载中...</p>")
+        html_text_widget.pack(fill=tk.BOTH, expand=True)
         
-        # 读取使用说明文件内容
-
-        with open("使用说明.md", "r", encoding="utf-8") as f:
-            content = f.read()
-            text_widget.insert(tk.END, content)
-        
-        # 禁止编辑
-        text_widget.config(state=tk.DISABLED)
+        # 读取使用说明文件内容并转换为HTML
+        try:
+            with open("使用说明.md", "r", encoding="utf-8") as f:
+                md_content = f.read()
+                # 将Markdown转换为HTML
+                html_content = markdown.markdown(md_content)
+                # 更新HTMLText控件的内容
+                html_text_widget.set_html(html_content)
+        except FileNotFoundError:
+            html_text_widget.set_html("<h2>使用说明文件未找到</h2>")
+        except Exception as e:
+            html_text_widget.set_html(f"<h2>加载使用说明时出错: {str(e)}</h2>")
         
     def create_text_generation_tab(self):
         # 文案类型选择
@@ -134,8 +252,8 @@ class XiaohongshuApp:
         ttk.Button(file_frame, text="浏览", command=self.browse_output_dir).grid(row=1, column=2, padx=5, pady=5)
         
         ttk.Label(file_frame, text="输出文件名:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-        self.output_filename_entry = ttk.Entry(file_frame, width=50)
-        self.output_filename_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        self.output_filename_entry_gen = ttk.Entry(file_frame, width=50)
+        self.output_filename_entry_gen.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
         ttk.Label(file_frame, text=".json").grid(row=2, column=2, padx=5, pady=5, sticky="w")
         
         file_frame.columnconfigure(1, weight=1)
@@ -162,34 +280,47 @@ class XiaohongshuApp:
         self.text_generation_tab.rowconfigure(3, weight=1)
         
     def create_image_crawling_tab(self):
+        # 文件选择
+        file_frame = ttk.LabelFrame(self.image_crawling_tab, text="文件选择")
+        file_frame.grid(row=0, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
+        
         # Word文档选择
-        ttk.Label(self.image_crawling_tab, text="Word文档:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        ttk.Label(file_frame, text="*", foreground="red").grid(row=0, column=0, padx=(5,0), pady=5, sticky="w")
+        ttk.Label(file_frame, text="Word文档:").grid(row=0, column=0, padx=(20,0), pady=5, sticky="w")
         self.word_file_var = tk.StringVar()
-        ttk.Entry(self.image_crawling_tab, textvariable=self.word_file_var, width=50).grid(row=0, column=1, sticky="ew", pady=5)
-        ttk.Button(self.image_crawling_tab, text="浏览", command=self.browse_word_file).grid(row=0, column=2, padx=(5,0), pady=5)
+        ttk.Entry(file_frame, textvariable=self.word_file_var, width=50).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        ttk.Button(file_frame, text="浏览", command=self.browse_word_file).grid(row=0, column=2, padx=5, pady=5)
         
         # 输出目录选择
-        ttk.Label(self.image_crawling_tab, text="输出目录:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Label(file_frame, text="*", foreground="red").grid(row=1, column=0, padx=(5,0), pady=5, sticky="w")
+        ttk.Label(file_frame, text="输出目录:").grid(row=1, column=0, padx=(20,0), pady=5, sticky="w")
         self.image_output_dir_var = tk.StringVar()
-        ttk.Entry(self.image_crawling_tab, textvariable=self.image_output_dir_var, width=50).grid(row=1, column=1, sticky="ew", pady=5)
-        ttk.Button(self.image_crawling_tab, text="浏览", command=self.browse_image_output_dir).grid(row=1, column=2, padx=(5,0), pady=5)
+        ttk.Entry(file_frame, textvariable=self.image_output_dir_var, width=50).grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        ttk.Button(file_frame, text="浏览", command=self.browse_image_output_dir).grid(row=1, column=2, padx=5, pady=5)
+        
+        file_frame.columnconfigure(1, weight=1)
         
         # 控制按钮
-        self.image_control_button = ttk.Button(self.image_crawling_tab, text="开始爬取", command=self.toggle_image_crawling)
-        self.image_control_button.grid(row=2, column=0, columnspan=3, pady=20)
+        control_frame = ttk.Frame(self.image_crawling_tab)
+        control_frame.grid(row=1, column=0, columnspan=3, padx=10, pady=10, sticky="ew")
+        
+        self.image_control_button = ttk.Button(control_frame, text="开始爬取", command=self.toggle_image_crawling)
+        self.image_control_button.pack(side=tk.LEFT, padx=5)
         
         # 进度条
-        self.image_progress = ttk.Progressbar(self.image_crawling_tab, mode='indeterminate')
-        self.image_progress.grid(row=3, column=0, columnspan=3, sticky="ew", pady=10)
+        self.image_progress = ttk.Progressbar(control_frame, mode='indeterminate')
+        self.image_progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
         # 日志显示区域
-        ttk.Label(self.image_crawling_tab, text="运行日志:").grid(row=4, column=0, sticky=tk.W, pady=(10, 5))
-        self.image_log_text = scrolledtext.ScrolledText(self.image_crawling_tab, height=15)
-        self.image_log_text.grid(row=5, column=0, columnspan=3, sticky="ewns", pady=5)
+        log_frame = ttk.LabelFrame(self.image_crawling_tab, text="运行日志")
+        log_frame.grid(row=2, column=0, columnspan=3, padx=10, pady=5, sticky="nsew")
+        
+        self.image_log_text = scrolledtext.ScrolledText(log_frame, height=15)
+        self.image_log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # 配置网格权重
-        self.image_crawling_tab.columnconfigure(1, weight=1)
-        self.image_crawling_tab.rowconfigure(5, weight=1)
+        self.image_crawling_tab.columnconfigure(0, weight=1)
+        self.image_crawling_tab.rowconfigure(2, weight=1)
         
     def browse_input_file(self):
         filename = filedialog.askopenfilename(
@@ -253,6 +384,11 @@ class XiaohongshuApp:
         self.image_log_text.see(tk.END)
         self.root.update_idletasks()
         
+    def log_crawl_message(self, message):
+        self.crawl_log_text.insert(tk.END, message + "\n")
+        self.crawl_log_text.see(tk.END)
+        self.root.update_idletasks()
+        
     def toggle_generation(self):
         """切换生成状态：开始/停止"""
         if not self.is_running:
@@ -266,7 +402,7 @@ class XiaohongshuApp:
         input_file = self.input_file_entry.get()
         output_dir = self.output_dir_entry.get()
         content_type = self.content_type.get()
-        output_filename = self.output_filename_entry.get().strip()
+        output_filename = self.output_filename_entry_gen.get().strip()
         
         # 如果用户没有输入文件名，使用默认文件名
         if not output_filename:
@@ -707,26 +843,119 @@ class XiaohongshuApp:
         except Exception as e:
             self.log_image_message(f"添加内容到Word文档时出错: {e}")
 
-    def run_async_func(self, func, *args):
-        """在新线程中运行异步函数"""
+    def toggle_note_crawling(self):
+        """切换文案爬取状态：开始/停止"""
+        if not hasattr(self, 'is_note_crawling'):
+            self.is_note_crawling = False
+            
+        if not self.is_note_crawling:
+            # 开始爬取
+            self.start_note_crawling()
+        else:
+            # 停止爬取
+            self.stop_note_crawling()
+            
+    def start_note_crawling(self):
+        # 获取用户输入的参数
+        mode = self.crawl_mode.get()
+        keyword = self.keyword_entry.get().strip()
+        user_url = self.user_url_entry.get().strip()
+        output_dir = self.output_dir_entry.get().strip()
+        output_filename = self.output_filename_entry.get().strip()
+        max_notes_str = self.max_notes_entry.get().strip()
+        
+        # 验证参数
+        if mode == "keyword" and not keyword:
+            messagebox.showerror("错误", "请输入搜索关键词")
+            return
+            
+        if mode == "user" and not user_url:
+            messagebox.showerror("错误", "请输入用户主页URL")
+            return
+            
+        if not output_dir:
+            messagebox.showerror("错误", "请选择输出目录")
+            return
+            
+        if not output_filename:
+            messagebox.showerror("错误", "请输入输出文件名")
+            return
+            
+        # 确保文件名以.json结尾
+        if not output_filename.endswith('.json'):
+            output_filename += '.json'
+            
+        # 解析最大笔记数
         try:
-            # 创建新的事件循环
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            # 确保传递的是可等待的对象
-            if asyncio.iscoroutinefunction(func):
-                coro = func(*args)
+            max_notes = int(max_notes_str) if max_notes_str else 0
+        except ValueError:
+            messagebox.showerror("错误", "最大笔记数必须是数字")
+            return
+            
+        # 设置输出文件路径
+        output_file = os.path.join(output_dir, output_filename)
+        
+        # 设置运行状态
+        self.is_note_crawling = True
+        self.crawl_button.config(text="停止爬取")
+        self.crawl_progress.start()
+        
+        # 在新线程中执行文案爬取任务
+        self.note_worker_thread = threading.Thread(
+            target=self.run_note_crawling, 
+            args=(mode, keyword, user_url, output_file, max_notes)
+        )
+        self.note_worker_thread.daemon = True
+        self.note_worker_thread.start()
+        
+    def run_note_crawling(self, mode, keyword, user_url, output_file, max_notes):
+        """在新线程中运行文案爬取任务"""
+        if not NOTE_CRAWLING_AVAILABLE or XiaohongshuCrawler is None:
+            self.log_crawl_message("文案爬取功能不可用")
+            return
+            
+        try:
+            self.log_crawl_message(f"开始爬取文案，模式: {mode}")
+            
+            # 创建爬虫实例
+            crawler = XiaohongshuCrawler(mode=mode)
+            
+            # 运行爬取任务
+            if mode == "keyword":
+                self.log_crawl_message(f"搜索关键词: {keyword}")
+                asyncio.run(crawler.crawl(
+                    keyword=keyword,
+                    max_notes=max_notes,
+                    output_file=output_file,
+                    use_cache=True
+                ))
             else:
-                # 如果不是协程函数，直接调用
-                result = func(*args)
-                loop.close()
-                return result
-            result = loop.run_until_complete(coro)
-            loop.close()
-            return result
+                self.log_crawl_message(f"用户主页URL: {user_url}")
+                asyncio.run(crawler.crawl(
+                    user_profile_url=user_url,
+                    max_notes=max_notes,
+                    output_file=output_file,
+                    use_cache=True
+                ))
+                
+            self.log_crawl_message("文案爬取完成!")
+            self.log_crawl_message(f"生成的文件: {output_file}")
+            messagebox.showinfo("完成", "文案爬取已完成!")
+            
         except Exception as e:
-            self.log_image_message(f"异步函数执行出错: {str(e)}")
-            return []
+            self.log_crawl_message(f"处理过程中出现错误: {str(e)}")
+            messagebox.showerror("错误", f"处理过程中出现错误: {str(e)}")
+        finally:
+            self.crawl_progress.stop()
+            self.crawl_button.config(text="开始爬取")
+            self.is_note_crawling = False
+            
+    def stop_note_crawling(self):
+        """停止文案爬取"""
+        self.is_note_crawling = False
+        self.crawl_button.config(text="开始爬取")
+        self.crawl_progress.stop()
+        self.log_crawl_message("=== 已停止文案爬取 ===")
 
 def main():
     root = tk.Tk()

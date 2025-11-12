@@ -10,7 +10,7 @@ import hashlib
 from collections import defaultdict
 
 # === 配置 ===
-SCHOOL_CSV = "支线/教育/guangzhou_all_schools.csv"
+SCHOOL_CSV = "D:\\小红书文案2\\代码\\支线\\教育\\guangzhou_all_schools.csv"
 
 client = OpenAI(
     base_url="https://ark.cn-beijing.volces.com/api/v3",
